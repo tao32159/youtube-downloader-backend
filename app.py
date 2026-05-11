@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import yt_dlp
 import os
@@ -37,7 +37,6 @@ def get_video_info(url):
             'duration': info.get('duration'),
             'thumbnail': info.get('thumbnail'),
             'author': info.get('uploader'),
-            'formats': info.get('formats', [])
         }
 
 def get_available_formats(url):
@@ -54,35 +53,44 @@ def get_available_formats(url):
         formats = []
         seen = set()
         
+        # 获取视频+音频格式
         for f in info.get('formats', []):
             # 跳过只有音频或只有视频的格式
             if f.get('vcodec') == 'none' or f.get('acodec') == 'none':
                 continue
                 
             # 创建格式标识
-            format_id = f'{f.get("height", 0)}p_{f.get("ext", "mp4")}'
+            height = f.get('height', 0)
+            if height >= 2160:
+                quality = '4K'
+            elif height >= 1080:
+                quality = '1080p'
+            elif height >= 720:
+                quality = '720p'
+            elif height >= 480:
+                quality = '480p'
+            else:
+                quality = '360p'
             
-            if format_id in seen:
+            format_key = f'{quality}_{f.get("ext", "mp4")}'
+            
+            if format_key in seen:
                 continue
-            seen.add(format_id)
+            seen.add(format_key)
             
             formats.append({
                 'format_id': f['format_id'],
-                'quality': f'{f.get("height", 0)}p',
+                'quality': quality,
                 'ext': f.get('ext', 'mp4'),
                 'filesize': f.get('filesize'),
-                'vcodec': f.get('vcodec'),
-                'acodec': f.get('acodec'),
-                'fps': f.get('fps'),
-                'has_video': f.get('vcodec') != 'none',
-                'has_audio': f.get('acodec') != 'none'
+                'has_video': True,
+                'has_audio': True
             })
         
         # 添加音频格式
-        audio_formats = []
         for f in info.get('formats', []):
             if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
-                audio_formats.append({
+                formats.append({
                     'format_id': f['format_id'],
                     'quality': 'audio',
                     'ext': 'mp3',
@@ -90,13 +98,7 @@ def get_available_formats(url):
                     'has_video': False,
                     'has_audio': True
                 })
-                break  # 只需要一个音频格式
-        
-        formats.extend(audio_formats)
-        
-        # 按质量排序
-        quality_order = {'4K': 4, '1080p': 3, '720p': 2, '480p': 1, '360p': 0, 'audio': -1}
-        formats.sort(key=lambda x: quality_order.get(x['quality'], 0), reverse=True)
+                break
         
         return formats
 
@@ -136,7 +138,7 @@ def api_get_formats():
 
 @app.route('/api/download', methods=['GET'])
 def api_download():
-    """API: 下载视频"""
+    """API: 获取下载链接"""
     url = request.args.get('url')
     format_id = request.args.get('format_id', 'best')
     
@@ -161,8 +163,7 @@ def api_download():
             if info.get('duration', 0) > MAX_DURATION:
                 return jsonify({'error': f'视频时长超过 {MAX_DURATION//60} 分钟限制'}), 400
             
-            # 生成下载 URL
-            # 注意：由于 yt-dlp 需要下载到服务器，这里返回直接的 YouTube 流 URL
+            # 查找指定格式
             for f in info.get('formats', []):
                 if f['format_id'] == format_id:
                     return jsonify({
